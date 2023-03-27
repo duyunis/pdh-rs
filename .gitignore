@@ -1,0 +1,12 @@
+/target
+/tests
+
+### IntelliJ IDEA ###
+.idea
+.fleet
+*.iws
+*.iml
+*.ipr
+
+### VS Code ###
+.vscode/
