@@ -3,7 +3,6 @@ use clap::{ArgAction, CommandFactory, Parser, Subcommand, ValueEnum};
 
 use pdh_rs::common::{consts, version};
 
-
 #[derive(Parser)]
 #[clap(name = "pdh")]
 struct Cmd {
@@ -47,12 +46,10 @@ struct SendCmd {
 }
 
 #[derive(Parser)]
-struct ReceiveCmd {
-}
+struct ReceiveCmd {}
 
 #[derive(Parser)]
-struct RelayCmd {
-}
+struct RelayCmd {}
 
 #[derive(Clone, Copy, ValueEnum, Debug)]
 enum RpcData {
@@ -83,15 +80,9 @@ fn main() -> Result<()> {
 
     if let Some(pdh_cmd) = cmd.pdh {
         match pdh_cmd {
-            PdhCmd::Send(send) => {
-
-            }
-            PdhCmd::Recv(recv) => {
-
-            }
-            PdhCmd::Relay(relay) => {
-
-            }
+            PdhCmd::Send(send) => {}
+            PdhCmd::Recv(recv) => {}
+            PdhCmd::Relay(relay) => {}
         }
     } else {
         let mut cmd = Cmd::command();

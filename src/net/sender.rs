@@ -1,17 +1,18 @@
-use std::{mem, thread};
 use std::io::ErrorKind;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
+use std::{mem, thread};
 
 use log::{debug, error, warn};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::runtime::Runtime;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::task::JoinHandle;
 
-use crate::message::Message;
+use crate::message;
+use crate::message::{Message, SendAble};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SenderConfig {
@@ -22,7 +23,7 @@ pub struct SenderConfig {
 
 pub struct USenderThread<T> {
     name: &'static str,
-    input: Receiver<T>,
+    input: Receiver<SendAble<T>>,
     output: Arc<Sender<T>>,
     config: SenderConfig,
     runtime: Arc<Runtime>,
@@ -33,7 +34,7 @@ pub struct USenderThread<T> {
 impl<T: Message> USenderThread<T> {
     pub fn new(
         name: &'static str,
-        input: Receiver<T>,
+        input: Receiver<SendAble<T>>,
         output: Arc<Sender<T>>,
         config: SenderConfig,
         runtime: Arc<Runtime>,
@@ -52,7 +53,7 @@ impl<T: Message> USenderThread<T> {
 
     pub fn start(&mut self) {
         if self.running.swap(true, Ordering::Relaxed) {
-            warn!("{} sender already started, do nothing.",self.name);
+            warn!("{} sender already started, do nothing.", self.name);
             return;
         }
         let input = self.input.resubscribe();
@@ -71,7 +72,7 @@ impl<T: Message> USenderThread<T> {
 
     pub fn notify_stop(&mut self) -> Option<JoinHandle<()>> {
         if !self.running.swap(false, Ordering::Relaxed) {
-            warn!("sender name: {} already stopped, do nothing.",self.name);
+            warn!("sender name: {} already stopped, do nothing.", self.name);
             return None;
         }
         debug!("notified stopping sender name: {}", self.name);
@@ -80,7 +81,7 @@ impl<T: Message> USenderThread<T> {
 
     pub fn stop(&mut self) {
         if !self.running.swap(false, Ordering::Relaxed) {
-            warn!("sender name: {} already stopped, do nothing.",self.name);
+            warn!("sender name: {} already stopped, do nothing.", self.name);
             return;
         }
         debug!("stopping sender name: {}", self.name);
@@ -93,10 +94,9 @@ impl<T: Message> USenderThread<T> {
 
 pub struct USender<T> {
     name: &'static str,
-    input: Receiver<T>,
+    input: Receiver<SendAble<T>>,
     output: Arc<Sender<T>>,
     tcp_stream: Option<TcpStream>,
-    last_flush: Duration,
     dst_ip: String,
     dst_port: u16,
     config: SenderConfig,
@@ -105,13 +105,9 @@ pub struct USender<T> {
 }
 
 impl<T: Message> USender<T> {
-    const TCP_WRITE_TIMEOUT: u64 = 3;
-    // s
-    const QUEUE_READ_TIMEOUT: u64 = 3; // s
-
     pub fn new(
         name: &'static str,
-        input: Receiver<T>,
+        input: Receiver<SendAble<T>>,
         output: Arc<Sender<T>>,
         config: SenderConfig,
         running: Arc<AtomicBool>,
@@ -121,7 +117,6 @@ impl<T: Message> USender<T> {
             input,
             output,
             tcp_stream: None,
-            last_flush: Duration::ZERO,
             dst_ip: config.dest_ip.clone(),
             dst_port: config.dest_port,
             config,
@@ -133,7 +128,7 @@ impl<T: Message> USender<T> {
     pub async fn process(&mut self) {
         while self.running.load(Ordering::Relaxed) {
             match self.input.recv().await {
-                Ok(message) => {
+                Ok(mut message) => {
                     self.send_message(message).await;
                 }
                 Err(_e) => {}
@@ -149,7 +144,9 @@ impl<T: Message> USender<T> {
                         debug!("{} sender tcp stream shutdown failed {}", self.name, e);
                     }
                 }
-                self.tcp_stream = TcpStream::connect((self.dst_ip.clone(), self.dst_port)).await.ok();
+                self.tcp_stream = TcpStream::connect((self.dst_ip.clone(), self.dst_port))
+                    .await
+                    .ok();
                 if let Some(tcp_stream) = self.tcp_stream.as_mut() {
                     self.reconnect = false;
                 } else {
@@ -157,19 +154,36 @@ impl<T: Message> USender<T> {
                     return;
                 }
             }
-
+            let header_size = message::Header::header_size();
             let tcp_stream = self.tcp_stream.as_mut().unwrap();
+            let mut header_buf = vec![0u8; header_size];
+            let n = tcp_stream.read(header_buf.as_mut_slice()).await;
+            if let Ok(_) = n {
+                let header = message::Header::decode(header_buf.as_slice());
+                if let Ok(header) = header {
+                    let mut message_buf = vec![0u8; header.frame_size as usize];
+                    let n = tcp_stream.read(message_buf.as_mut_slice()).await;
+                    match header.message_type {
+                        message::MessageType::Compress => {}
+                        _ => {}
+                    }
+                } else {
+                    // print log
+                }
+            }
         }
     }
 
-    async fn send_message(&mut self, message: T) {
+    async fn send_message(&mut self, mut send_able: SendAble<T>) {
         if self.reconnect || self.tcp_stream.is_none() {
             if let Some(mut t) = self.tcp_stream.take() {
                 if let Err(e) = t.shutdown().await {
                     debug!("{} sender tcp stream shutdown failed {}", self.name, e);
                 }
             }
-            self.tcp_stream = TcpStream::connect((self.dst_ip.clone(), self.dst_port)).await.ok();
+            self.tcp_stream = TcpStream::connect((self.dst_ip.clone(), self.dst_port))
+                .await
+                .ok();
             if let Some(tcp_stream) = self.tcp_stream.as_mut() {
                 self.reconnect = false;
             } else {
@@ -181,22 +195,34 @@ impl<T: Message> USender<T> {
         let tcp_stream = self.tcp_stream.as_mut().unwrap();
 
         let mut buffer = vec![];
-        let n = message.encode(buffer.as_mut());
-        let send_max_buffer = self.config.send_max_buffer;
-        for buf in buffer.chunks(send_max_buffer) {
-            let result = tcp_stream.write(buf).await;
-            match result {
-                Ok(size) => {}
-                Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                    debug!("{} sender tcp stream write data block {}", self.name, e);
-                    continue;
+        let res = send_able.encode(&mut buffer);
+        match res {
+            Ok(_) => {
+                let send_max_buffer = self.config.send_max_buffer;
+                for buf in buffer.chunks(send_max_buffer) {
+                    let result = tcp_stream.write(buf).await;
+                    match result {
+                        Ok(size) => {
+                            tcp_stream.flush().await.unwrap();
+                        }
+                        Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                            debug!("{} sender tcp stream write data block {}", self.name, e);
+                            continue;
+                        }
+                        Err(e) => {
+                            error!(
+                                "{} sender tcp stream write data to {}:{} failed: {}",
+                                self.name, self.dst_ip, self.dst_port, e
+                            );
+                            self.tcp_stream.take();
+                            break;
+                        }
+                    };
                 }
-                Err(e) => {
-                    error!("{} sender tcp stream write data to {}:{} failed: {}",self.name, self.dst_ip, self.dst_port, e);
-                    self.tcp_stream.take();
-                    break;
-                }
-            };
+            }
+            Err(e) => {
+                error!("encode message failed: {}", e);
+            }
         }
     }
 }

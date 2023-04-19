@@ -1,6 +1,6 @@
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time;
 
 use tokio::runtime::Runtime;
@@ -16,7 +16,13 @@ pub struct DiscoverOptions {
 }
 
 impl DiscoverOptions {
-    pub fn new(broadcast_addr: String, service_port: u16, timeout: time::Duration, broadcast_delay: time::Duration, payload: Vec<u8>) -> Self {
+    pub fn new(
+        broadcast_addr: String,
+        service_port: u16,
+        timeout: time::Duration,
+        broadcast_delay: time::Duration,
+        payload: Vec<u8>,
+    ) -> Self {
         Self {
             broadcast_addr,
             service_port,
@@ -50,10 +56,7 @@ pub struct Discover {
 
 impl Discover {
     pub fn new(rt: Arc<Runtime>, options: DiscoverOptions) -> Self {
-        Self {
-            options,
-            rt,
-        }
+        Self { options, rt }
     }
 
     pub fn discover_service(&self) -> Option<Service> {
@@ -86,14 +89,17 @@ impl Discover {
                         let (bytes_read, src_addr) = recv;
                         let read = buffer[..bytes_read].to_vec();
                         if read.eq(&self.options.payload) {
-                            return Some(Service { socket_addr: src_addr });
+                            return Some(Service {
+                                socket_addr: src_addr,
+                            });
                         }
                     }
                     Err(_) => {}
                 }
-            };
+            }
             None
-        }).await;
+        })
+        .await;
         match res {
             Ok(service) => {
                 return Ok(service);

@@ -4,15 +4,25 @@ use std::fmt::Debug;
 use anyhow::Result;
 use byteorder::{BigEndian, ReadBytesExt};
 use num_enum::IntoPrimitive;
+use serde::Deserialize;
 
 /// A abstraction for message data and serialize data
 pub trait Message: Debug + Send + Clone + 'static {
     // Encode message to bytes stream
-    fn encode(self, buf: &mut Vec<u8>) -> Result<usize>;
-    // Decode message from bytes stream
-    fn decode(&mut self, buf: &[u8]) -> Result<()>;
+    fn encode(&self) -> Result<Vec<u8>>;
+
     // The message type identified by the sender
     fn message_type(&self) -> MessageType;
+}
+
+// Decode message from bytes stream
+pub fn decode<'de, T>(buf: &'de [u8]) -> Result<T>
+    where
+        T: Message,
+        T: Deserialize<'de>,
+{
+    let msg = bincode::deserialize(buf)?;
+    Ok(msg)
 }
 
 #[derive(Debug, Clone, Copy, IntoPrimitive)]
@@ -67,7 +77,7 @@ impl From<u8> for MessageType {
             0 => MessageType::Compress,
             1 => MessageType::Syslog,
             2 => MessageType::Statsd,
-            _ => MessageType::Unknown,
+            100 | _ => MessageType::Unknown,
         }
     }
 }
@@ -76,23 +86,23 @@ const HEADER_SIZE: usize = 8 + 1 + 8;
 
 #[derive(Debug, Clone)]
 pub struct Header {
-    frame_size: u64,
-    msg_type: MessageType,
-    offset: u64,
+    pub frame_size: u64,
+    pub message_type: MessageType,
+    pub offset: u64,
 }
 
 impl Header {
-    pub fn new(frame_size: u64, msg_type: MessageType, offset: u64) -> Self {
+    pub fn new(frame_size: u64, message_type: MessageType, offset: u64) -> Self {
         Self {
             frame_size,
-            msg_type,
+            message_type,
             offset,
         }
     }
 
     pub fn encode(&self, buffer: &mut Vec<u8>) {
         buffer.extend_from_slice(self.frame_size.to_be_bytes().as_slice());
-        buffer.push(self.msg_type.into());
+        buffer.push(self.message_type.into());
         buffer.extend_from_slice(self.offset.to_be_bytes().as_slice());
     }
 
@@ -105,5 +115,54 @@ impl Header {
 
     pub fn header_size() -> usize {
         HEADER_SIZE
+    }
+}
+
+impl Default for Header {
+    fn default() -> Self {
+        Self {
+            frame_size: 0,
+            message_type: MessageType::Unknown,
+            offset: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SendAble<T> {
+    pub header: Header,
+    pub message: T,
+}
+
+impl<T: Message> SendAble<T> {
+    pub fn new(message: T) -> Self {
+        Self {
+            header: Header::default(),
+            message,
+        }
+    }
+
+    pub fn encode(&mut self, buf: &mut Vec<u8>) -> Result<()> {
+        let mut mb = self.message.encode()?;
+        self.header.frame_size = mb.len() as u64;
+        self.header.message_type = self.message.message_type();
+        self.header.encode(buf);
+        buf.append(mb.as_mut());
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RecvAble {
+    pub message_type: MessageType,
+    pub buf: Vec<u8>,
+}
+
+impl RecvAble {
+    pub fn new(message_type: MessageType, buf: Vec<u8>) -> Self {
+        Self {
+            message_type,
+            buf,
+        }
     }
 }

@@ -15,10 +15,7 @@ impl fmt::Display for VersionInfo {
     Version: {}
     Compiler: {}
     CompileTime: {}",
-            self.name,
-            self.version,
-            self.compiler,
-            self.compile_time
+            self.name, self.version, self.compiler, self.compile_time
         )
     }
 }
