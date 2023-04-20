@@ -4,7 +4,7 @@ use std::fmt::Debug;
 use anyhow::Result;
 use byteorder::{BigEndian, ReadBytesExt};
 use num_enum::IntoPrimitive;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// A abstraction for message data and serialize data
 pub trait Message: Debug + Send + Clone + 'static {
@@ -23,6 +23,30 @@ pub fn decode<'de, T>(buf: &'de [u8]) -> Result<T>
 {
     let msg = bincode::deserialize(buf)?;
     Ok(msg)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BaseMessage {
+    pub buf: Vec<u8>,
+}
+
+impl BaseMessage {
+    pub fn new(buf: Vec<u8>) -> Self {
+        Self {
+            buf,
+        }
+    }
+}
+
+impl Message for BaseMessage {
+    fn encode(&self) -> Result<Vec<u8>> {
+        let buf = bincode::serialize(self)?;
+        Ok(buf)
+    }
+
+    fn message_type(&self) -> MessageType {
+        MessageType::Compress
+    }
 }
 
 #[derive(Debug, Clone, Copy, IntoPrimitive)]
@@ -164,5 +188,39 @@ impl RecvAble {
             message_type,
             buf,
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TransmitAble {
+    pub header: Option<Header>,
+    pub buf: Vec<u8>,
+}
+
+impl TransmitAble {
+    pub fn new() -> Self {
+        Self {
+            header: None,
+            buf: vec![],
+        }
+    }
+
+    pub fn encode_with_message<T: Message>(&mut self, message: T, offset: u64) -> Result<()> {
+        let mut buf = vec![];
+        let mut msg_buf = message.encode()?;
+        let mut header = Header::new(msg_buf.len() as u64, message.message_type(), offset);
+        header.encode(buf.as_mut());
+        buf.append(msg_buf.as_mut());
+        self.header = Some(header);
+        self.buf = buf;
+        Ok(())
+    }
+
+    pub fn encode_with_header(&mut self, header: Header, msg_buf: &mut Vec<u8>) {
+        let mut buf = vec![];
+        header.encode(buf.as_mut());
+        buf.append(msg_buf.as_mut());
+        self.header = Some(header);
+        self.buf = buf;
     }
 }

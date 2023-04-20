@@ -23,117 +23,33 @@ pub struct ReceiverConfig {
     pub send_max_buffer: usize,
 }
 
-pub struct UReceiverThread<T> {
-    name: &'static str,
-    input: Receiver<T>,
-    output: Arc<Sender<T>>,
-    config: ReceiverConfig,
-    runtime: Arc<Runtime>,
-    thread_handle: Option<JoinHandle<()>>,
-    running: Arc<AtomicBool>,
-}
-
-impl<T: Message> UReceiverThread<T> {
-    pub fn new(
-        name: &'static str,
-        input: Receiver<T>,
-        output: Arc<Sender<T>>,
-        config: ReceiverConfig,
-        runtime: Arc<Runtime>,
-    ) -> Self {
-        let running = Arc::new(AtomicBool::new(false));
-        Self {
-            name,
-            input,
-            output,
-            config,
-            runtime,
-            thread_handle: None,
-            running,
-        }
-    }
-
-    pub fn start(&mut self) {
-        if self.running.swap(true, Ordering::Relaxed) {
-            warn!("{} receiver already started, do nothing.", self.name);
-            return;
-        }
-        let input = self.input.resubscribe();
-        /*let mut u_receiver = UReceiver::new(
-            self.name,
-            input,
-            self.output.clone(),
-            self.config.clone(),
-            self.runtime.clone(),
-            self.running.clone(),
-        );
-        self.thread_handle = Some(self.runtime.spawn(async move {
-            u_receiver.process().await;
-        }));*/
-        debug!("{} uniform receiver started", self.name);
-    }
-
-    pub fn notify_stop(&mut self) -> Option<JoinHandle<()>> {
-        if !self.running.swap(false, Ordering::Relaxed) {
-            warn!("receiver name: {} already stopped, do nothing.", self.name);
-            return None;
-        }
-        debug!("notified stopping receiver name: {}", self.name);
-        self.thread_handle.take()
-    }
-
-    pub fn stop(&mut self) {
-        if !self.running.swap(false, Ordering::Relaxed) {
-            warn!("receiver name: {} already stopped, do nothing.", self.name);
-            return;
-        }
-        debug!("stopping receiver name: {}", self.name);
-        self.runtime.block_on(async {
-            let _ = self.thread_handle.take().unwrap().await;
-        });
-        debug!("stopped receiver name: {}", self.name);
-    }
-}
-
-// pub type HandelMessage = fn(TcpStream) -> Pin<Box<dyn Future<Output=anyhow::Result<()>> + Send>>;
-pub type HandelMessage<T> = fn(Sender<SendAble<T>>, Receiver<RecvAble>) -> Pin<Box<dyn Future<Output=anyhow::Result<()>> + Send>>;
+pub type Bidirectional<T> = fn(Sender<SendAble<T>>, Receiver<RecvAble>) -> Pin<Box<dyn Future<Output=anyhow::Result<()>> + Send>>;
 
 pub struct UReceiver<T> {
     name: &'static str,
-    input: Receiver<T>,
-    output: Arc<Sender<T>>,
-    incoming: Mutex<HashMap<String, Arc<TcpStream>>>,
-    last_flush: Duration,
     config: ReceiverConfig,
     runtime: Arc<Runtime>,
     threads_handle: Mutex<Vec<JoinHandle<()>>>,
     running: Arc<AtomicBool>,
-    handel_message: Arc<HandelMessage<T>>,
+    bidirectional: Arc<Bidirectional<T>>,
 }
 
 impl<T: Message> UReceiver<T> {
     pub fn new(
         name: &'static str,
-        input: Receiver<T>,
-        output: Arc<Sender<T>>,
         config: ReceiverConfig,
         runtime: Arc<Runtime>,
         running: Arc<AtomicBool>,
-        handel_message: HandelMessage<T>,
+        bidirectional: Bidirectional<T>,
     ) -> Self {
-        let incoming = Mutex::default();
         let threads_handle = Mutex::default();
         Self {
             name,
-            input,
-            output,
-            incoming,
-            last_flush: Duration::ZERO,
             config,
             runtime,
             threads_handle,
             running,
-            handel_message: Arc::new(handel_message),
+            bidirectional: Arc::new(bidirectional),
         }
     }
 
@@ -150,7 +66,7 @@ impl<T: Message> UReceiver<T> {
                     let incoming = listener.accept().await;
                     if let Ok((mut stream, addr)) = incoming {
                         let running = self.running.clone();
-                        let handel_message = self.handel_message.clone();
+                        let bidirectional = self.bidirectional.clone();
                         let send_max_buffer = self.config.send_max_buffer.clone();
 
                         let (sender_send, sender_recv) = broadcast::channel(1024);
@@ -168,7 +84,7 @@ impl<T: Message> UReceiver<T> {
                             .lock()
                             .unwrap()
                             .push(self.runtime.spawn(async move {
-                                let res = handel_message(sender_send, recv_recv).await;
+                                bidirectional(sender_send, recv_recv).await.unwrap();
                             }));
                     }
                 }
@@ -232,11 +148,6 @@ impl<T: Message> UReceiver<T> {
                                         error!("stream read error: {}", e);
                                     }
                                 }
-                                // todo match n
-                                // let m = message::decode_message(header.msg_type, message_buf);
-                                // let res = sender.send(BaseMessage{buffer: vec![]});
-                                // let (sender, receiver) = broadcast::channel(1024);
-                                // let res = (handel_message)(receiver, Arc::new(sender));
                             } else {
                                 // print log
                             }
