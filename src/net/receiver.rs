@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::runtime::Runtime;
@@ -15,7 +15,7 @@ use tokio::sync::broadcast;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::task::JoinHandle;
 
-use crate::message::{self, Message, RecvAble, SendAble};
+use crate::message::{self, Message, TransmitAble};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ReceiverConfig {
@@ -23,24 +23,24 @@ pub struct ReceiverConfig {
     pub send_max_buffer: usize,
 }
 
-pub type Bidirectional<T> = fn(Sender<SendAble<T>>, Receiver<RecvAble>) -> Pin<Box<dyn Future<Output=anyhow::Result<()>> + Send>>;
+pub type Bidirectional = fn(Sender<TransmitAble>, Receiver<TransmitAble>) -> Pin<Box<dyn Future<Output=anyhow::Result<()>> + Send>>;
 
-pub struct UReceiver<T> {
+pub struct UReceiver {
     name: &'static str,
     config: ReceiverConfig,
     runtime: Arc<Runtime>,
     threads_handle: Mutex<Vec<JoinHandle<()>>>,
     running: Arc<AtomicBool>,
-    bidirectional: Arc<Bidirectional<T>>,
+    bidirectional: Arc<Bidirectional>,
 }
 
-impl<T: Message> UReceiver<T> {
+impl UReceiver {
     pub fn new(
         name: &'static str,
         config: ReceiverConfig,
         runtime: Arc<Runtime>,
         running: Arc<AtomicBool>,
-        bidirectional: Bidirectional<T>,
+        bidirectional: Bidirectional,
     ) -> Self {
         let threads_handle = Mutex::default();
         Self {
@@ -96,60 +96,64 @@ impl<T: Message> UReceiver<T> {
         }
     }
 
-    async fn process_stream(running: Arc<AtomicBool>, mut stream: TcpStream, send_max_buffer: usize, mut input: Receiver<SendAble<T>>, output: Arc<Sender<RecvAble>>) {
+    async fn process_stream(running: Arc<AtomicBool>, mut stream: TcpStream, send_max_buffer: usize, mut input: Receiver<TransmitAble>, output: Arc<Sender<TransmitAble>>) {
         let header_size = message::Header::header_size();
         let mut header_buf = vec![0u8; header_size];
         while running.load(Ordering::Relaxed) {
             tokio::select! {
-                Ok(mut send_able) = input.recv() => {
-                    let mut buffer = vec![];
-                    let res = send_able.encode(&mut buffer);
-                    match res {
-                        Ok(_) => {
-                            for buf in buffer.chunks(send_max_buffer) {
-                                let result = stream.write(buf).await;
-                                match result {
-                                    Ok(size) => {
-                                        stream.flush().await.unwrap();
-                                    }
-                                    Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                                        debug!("tcp stream write data block {}", e);
-                                        continue;
-                                    }
-                                    Err(e) => {
-                                        error!("tcp stream write data failed: {}", e);
-                                        break;
-                                    }
-                                };
+                Ok(mut transmit_able) = input.recv() => {
+                    let mut buffer = transmit_able.buf;
+                    for buf in buffer.chunks(send_max_buffer) {
+                        let result = stream.write(buf).await;
+                        match result {
+                            Ok(size) => {
+                                stream.flush().await.unwrap();
                             }
-                        }
-                        Err(e) => {
-                            error!("encode message failed: {}", e);
-                        }
+                            Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                                debug!("tcp stream write data block {}", e);
+                                continue;
+                            }
+                            Err(e) => {
+                                error!("tcp stream write data failed: {}", e);
+                                break;
+                            }
+                        };
                     }
                 },
                 Ok(n) = stream.read(header_buf.as_mut_slice()) => {
                     match n {
                         0 => {
-                            println!("client is closed");
+                            info!("client is closed");
                             break;
                         }
                         _ => {
+                            let mut transmit_able = TransmitAble::new();
+
                             let header = message::Header::decode(header_buf.as_slice());
-                            if let Ok(header) = header {
-                                let mut message_buf = vec![0u8; header.frame_size as usize];
-                                let read = stream.read(message_buf.as_mut_slice()).await;
-                                match read {
-                                    Ok(_) => {
-                                        let recv_able = RecvAble::new(header.message_type, message_buf);
-                                        output.send(recv_able).unwrap();
-                                    }
-                                    Err(e) => {
-                                        error!("stream read error: {}", e);
+                            match header {
+                                Ok(header) => {
+                                    if header.frame_size == 0 {
+                                        let mut message_buf = vec![];
+                                        transmit_able.encode_with_header(header, message_buf.as_mut());
+                                        output.send(transmit_able).unwrap();
+                                    } else {
+                                        let mut message_buf = vec![0u8; header.frame_size as usize];
+                                        let read = stream.read(message_buf.as_mut_slice()).await;
+                                        match read {
+                                            Ok(_) => {
+                                                let mut transmit_able = TransmitAble::new();
+                                                transmit_able.encode_with_header(header, &mut message_buf);
+                                                output.send(transmit_able).unwrap();
+                                            }
+                                            Err(e) => {
+                                                error!("stream read error: {}", e);
+                                            }
+                                        }
                                     }
                                 }
-                            } else {
-                                // print log
+                                Err(e) => {
+                                    error!("decode header error: {:?}", e);
+                                }
                             }
                         }
                     }

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::runtime::Runtime;
@@ -12,7 +12,7 @@ use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::task::JoinHandle;
 
 use crate::message;
-use crate::message::{BaseMessage, Message, MessageType, RecvAble, SendAble, TransmitAble};
+use crate::message::{BaseMessage, Message, MessageType, PingMessage, TransmitAble};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SenderConfig {
@@ -228,7 +228,7 @@ impl USender {
                         Ok(n) = stream.read(header_buf.as_mut_slice()) => {
                             match n {
                                 0 => {
-                                    println!("server is closed");
+                                    info!("server is closed");
                                     break;
                                 }
                                 _ => {
@@ -253,9 +253,9 @@ impl USender {
                             }
                         },
                         _ = interval.tick() => {
-                            println!("heartbeat!!!");
+                            debug!("heartbeat!!!");
                             let mut transmit_able = TransmitAble::new();
-                            transmit_able.encode_with_message(BaseMessage::new(vec![]), 0).unwrap();
+                            transmit_able.encode_with_message(PingMessage::new(), 0).unwrap();
                             stream = self.send(stream, transmit_able).await.unwrap();
                         }
                     }

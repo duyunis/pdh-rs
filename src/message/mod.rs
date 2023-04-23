@@ -7,7 +7,7 @@ use num_enum::IntoPrimitive;
 use serde::{Deserialize, Serialize};
 
 /// A abstraction for message data and serialize data
-pub trait Message: Debug + Send + Clone + 'static {
+pub trait Message: Debug + Send + 'static {
     // Encode message to bytes stream
     fn encode(&self) -> Result<Vec<u8>>;
 
@@ -25,35 +25,11 @@ pub fn decode<'de, T>(buf: &'de [u8]) -> Result<T>
     Ok(msg)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BaseMessage {
-    pub buf: Vec<u8>,
-}
-
-impl BaseMessage {
-    pub fn new(buf: Vec<u8>) -> Self {
-        Self {
-            buf,
-        }
-    }
-}
-
-impl Message for BaseMessage {
-    fn encode(&self) -> Result<Vec<u8>> {
-        let buf = bincode::serialize(self)?;
-        Ok(buf)
-    }
-
-    fn message_type(&self) -> MessageType {
-        MessageType::Compress
-    }
-}
-
 #[derive(Debug, Clone, Copy, IntoPrimitive)]
 #[repr(u8)]
 pub enum MessageType {
-    Compress = 0,
-    Syslog = 1,
+    Ping = 0,
+    Pong = 1,
     Statsd = 2,
     Metrics = 3,
     TaggedFlow = 4,
@@ -74,8 +50,8 @@ pub enum MessageType {
 impl fmt::Display for MessageType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Compress => write!(f, "compress"),
-            Self::Syslog => write!(f, "syslog"),
+            Self::Ping => write!(f, "ping"),
+            Self::Pong => write!(f, "pong"),
             Self::Statsd => write!(f, "statsd"),
             Self::Metrics => write!(f, "metrics"),
             Self::TaggedFlow => write!(f, "l4_log"),
@@ -98,8 +74,8 @@ impl fmt::Display for MessageType {
 impl From<u8> for MessageType {
     fn from(value: u8) -> Self {
         match value {
-            0 => MessageType::Compress,
-            1 => MessageType::Syslog,
+            0 => MessageType::Ping,
+            1 => MessageType::Pong,
             2 => MessageType::Statsd,
             100 | _ => MessageType::Unknown,
         }
@@ -108,7 +84,7 @@ impl From<u8> for MessageType {
 
 const HEADER_SIZE: usize = 8 + 1 + 8;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Header {
     pub frame_size: u64,
     pub message_type: MessageType,
@@ -133,7 +109,7 @@ impl Header {
     pub fn decode(buf: &[u8]) -> Result<Header> {
         let frame_size = buf[0..8].as_ref().read_u64::<BigEndian>()?;
         let msg_type = MessageType::from(buf[8]);
-        let offset = buf[9..].as_ref().read_u64::<BigEndian>()?;
+        let offset = buf[9..17].as_ref().read_u64::<BigEndian>()?;
         Ok(Header::new(frame_size, msg_type, offset))
     }
 
@@ -153,54 +129,13 @@ impl Default for Header {
 }
 
 #[derive(Debug, Clone)]
-pub struct SendAble<T> {
-    pub header: Header,
-    pub message: T,
-}
-
-impl<T: Message> SendAble<T> {
-    pub fn new(message: T) -> Self {
-        Self {
-            header: Header::default(),
-            message,
-        }
-    }
-
-    pub fn encode(&mut self, buf: &mut Vec<u8>) -> Result<()> {
-        let mut mb = self.message.encode()?;
-        self.header.frame_size = mb.len() as u64;
-        self.header.message_type = self.message.message_type();
-        self.header.encode(buf);
-        buf.append(mb.as_mut());
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct RecvAble {
-    pub message_type: MessageType,
-    pub buf: Vec<u8>,
-}
-
-impl RecvAble {
-    pub fn new(message_type: MessageType, buf: Vec<u8>) -> Self {
-        Self {
-            message_type,
-            buf,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct TransmitAble {
-    pub header: Option<Header>,
     pub buf: Vec<u8>,
 }
 
 impl TransmitAble {
     pub fn new() -> Self {
         Self {
-            header: None,
             buf: vec![],
         }
     }
@@ -211,7 +146,6 @@ impl TransmitAble {
         let mut header = Header::new(msg_buf.len() as u64, message.message_type(), offset);
         header.encode(buf.as_mut());
         buf.append(msg_buf.as_mut());
-        self.header = Some(header);
         self.buf = buf;
         Ok(())
     }
@@ -220,7 +154,86 @@ impl TransmitAble {
         let mut buf = vec![];
         header.encode(buf.as_mut());
         buf.append(msg_buf.as_mut());
-        self.header = Some(header);
         self.buf = buf;
+    }
+
+    pub fn decode_header(&self) -> Result<Header> {
+        let header = Header::decode(self.buf.as_slice())?;
+        Ok(header)
+    }
+
+    pub fn decode(&self) -> Result<(Header, Box<dyn Message>)> {
+        let header = Header::decode(self.buf.as_slice())?;
+        let message: Box<dyn Message> = match header.message_type {
+            MessageType::Ping => {
+                Box::new(PingMessage::new())
+            }
+            _ => {
+                Box::new(BaseMessage::new(vec![]))
+            }
+        };
+        Ok((header, message))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BaseMessage {
+    pub buf: Vec<u8>,
+}
+
+impl BaseMessage {
+    pub fn new(buf: Vec<u8>) -> Self {
+        Self {
+            buf,
+        }
+    }
+}
+
+impl Message for BaseMessage {
+    fn encode(&self) -> Result<Vec<u8>> {
+        let buf = bincode::serialize(self)?;
+        Ok(buf)
+    }
+
+    fn message_type(&self) -> MessageType {
+        MessageType::Unknown
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PingMessage;
+
+impl PingMessage {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Message for PingMessage {
+    fn encode(&self) -> Result<Vec<u8>> {
+        Ok(vec![])
+    }
+
+    fn message_type(&self) -> MessageType {
+        MessageType::Ping
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PongMessage;
+
+impl PongMessage {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Message for PongMessage {
+    fn encode(&self) -> Result<Vec<u8>> {
+        Ok(vec![])
+    }
+
+    fn message_type(&self) -> MessageType {
+        MessageType::Pong
     }
 }
