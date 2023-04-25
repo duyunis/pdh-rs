@@ -1,3 +1,3 @@
 pub mod discover;
-pub mod receiver;
-pub mod sender;
+pub mod server;
+pub mod clicent;

@@ -13,6 +13,7 @@ byteorder = "1.4.3"
 clap = { version = "4.1.11", features = ["derive"] }
 log = "0.4.17"
 num_enum = "0.5.11"
+pbr = "1.1.1"
 serde = { version = "1.0.160", features = ["derive"] }
 simple_logger = "4.1.0"
 time = "0.3.20"

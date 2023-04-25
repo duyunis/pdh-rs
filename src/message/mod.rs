@@ -168,8 +168,11 @@ impl TransmitAble {
             MessageType::Ping => {
                 Box::new(PingMessage::new())
             }
+            MessageType::Pong => {
+                Box::new(PongMessage::new())
+            }
             _ => {
-                Box::new(BaseMessage::new(vec![]))
+                Box::new(BaseMessage::new(self.buf.clone()))
             }
         };
         Ok((header, message))

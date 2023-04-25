@@ -18,26 +18,26 @@ use tokio::task::JoinHandle;
 use crate::message::{self, Message, TransmitAble};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct ReceiverConfig {
+pub struct ServerConfig {
     pub listener_port: u16,
     pub send_max_buffer: usize,
 }
 
 pub type Bidirectional = fn(Sender<TransmitAble>, Receiver<TransmitAble>) -> Pin<Box<dyn Future<Output=anyhow::Result<()>> + Send>>;
 
-pub struct UReceiver {
+pub struct Server {
     name: &'static str,
-    config: ReceiverConfig,
+    config: ServerConfig,
     runtime: Arc<Runtime>,
     threads_handle: Mutex<Vec<JoinHandle<()>>>,
     running: Arc<AtomicBool>,
     bidirectional: Arc<Bidirectional>,
 }
 
-impl UReceiver {
+impl Server {
     pub fn new(
         name: &'static str,
-        config: ReceiverConfig,
+        config: ServerConfig,
         runtime: Arc<Runtime>,
         running: Arc<AtomicBool>,
         bidirectional: Bidirectional,
@@ -51,10 +51,6 @@ impl UReceiver {
             running,
             bidirectional: Arc::new(bidirectional),
         }
-    }
-
-    pub async fn process(&mut self) {
-        while self.running.load(Ordering::Relaxed) {}
     }
 
     pub async fn listener(&self) {
@@ -91,7 +87,7 @@ impl UReceiver {
             }
             Err(e) => {
                 self.running.store(false, Ordering::Relaxed);
-                error!("start receiver failed: {}", e);
+                error!("start server failed: {}", e);
             }
         }
     }
@@ -157,7 +153,7 @@ impl UReceiver {
                             }
                         }
                     }
-                },
+                }
             }
         }
     }
