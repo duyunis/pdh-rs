@@ -43,6 +43,10 @@ struct SendCmd {
     /// relay address (default: public relay)
     #[clap(long)]
     relay: Option<String>,
+
+    /// file(s) to send
+    #[clap(required = true, num_args = 1..)]
+    files: Vec<String>,
 }
 
 #[derive(Parser)]
@@ -80,7 +84,9 @@ fn main() -> Result<()> {
 
     if let Some(pdh_cmd) = cmd.pdh {
         match pdh_cmd {
-            PdhCmd::Send(send) => {}
+            PdhCmd::Send(send) => {
+
+            }
             PdhCmd::Recv(recv) => {}
             PdhCmd::Relay(relay) => {}
         }

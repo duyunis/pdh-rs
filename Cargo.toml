@@ -16,6 +16,7 @@ num_enum = "0.5.11"
 pbr = "1.1.1"
 serde = { version = "1.0.160", features = ["derive"] }
 simple_logger = "4.1.0"
+thiserror = "1.0.40"
 time = "0.3.20"
 tokio = { version = "1.26.0", features = ["full"] }
 

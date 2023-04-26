@@ -11,7 +11,7 @@ pub trait Message: Debug + Send + 'static {
     // Encode message to bytes stream
     fn encode(&self) -> Result<Vec<u8>>;
 
-    // The message type identified by the sender
+    // The message type identified by the send
     fn message_type(&self) -> MessageType;
 }
 
