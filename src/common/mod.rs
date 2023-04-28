@@ -19,7 +19,12 @@ pub enum Error {
 macro_rules! print_flush {
     ($($arg:tt)*) => {{
         use std::io::{Write, stdout};
-        print!($($arg)*);
+        if format!($($arg)*).starts_with('\r') {
+            print!("\r                                                                              ");
+            print!($($arg)*);
+        } else {
+            print!($($arg)*);
+        }
         stdout().flush().unwrap();
     }};
 }

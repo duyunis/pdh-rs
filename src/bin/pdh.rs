@@ -1,7 +1,10 @@
+use std::sync::Arc;
 use anyhow::Result;
 use clap::{ArgAction, CommandFactory, Parser, Subcommand, ValueEnum};
+use tokio::runtime::Builder;
 
 use pdh_rs::common::{consts, version};
+use pdh_rs::send::sender::{Sender, SenderOptions};
 
 #[derive(Parser)]
 #[clap(name = "pdh")]
@@ -83,9 +86,16 @@ fn main() -> Result<()> {
     }
 
     if let Some(pdh_cmd) = cmd.pdh {
+        let runtime = Builder::new_multi_thread()
+            .worker_threads(16)
+            .enable_all()
+            .build()
+            .unwrap();
         match pdh_cmd {
             PdhCmd::Send(send) => {
-
+                let sender_options = SenderOptions::new(send.share_code, send.zip.unwrap(), send.relay, send.files);
+                let mut sender = Sender::new(Arc::new(runtime), sender_options);
+                return sender.send();
             }
             PdhCmd::Recv(recv) => {}
             PdhCmd::Relay(relay) => {}

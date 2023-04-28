@@ -1,8 +1,9 @@
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time;
 
+use log::debug;
 use tokio::runtime::Runtime;
 
 use crate::common::consts;
@@ -38,7 +39,7 @@ impl Default for DiscoverOptions {
         Self {
             broadcast_addr: consts::DEFAULT_BROADCAST_ADDR.to_string(),
             service_port: consts::DEFAULT_SERVICE_PORT,
-            timeout: time::Duration::from_secs(60 * 3),
+            timeout: time::Duration::from_secs(60),
             broadcast_delay: time::Duration::from_secs(1),
             payload: b"pdh_broadcast_msg".to_vec(),
         }
@@ -74,6 +75,29 @@ impl Discover {
         None
     }
 
+    pub fn broadcast(&self) -> std::io::Result<()> {
+        let socket = UdpSocket::bind("0.0.0.0:0")?;
+        socket.set_broadcast(true)?;
+
+        let broadcast_addr: SocketAddr = format!("{}:{}", self.options.broadcast_addr.as_str(), self.options.service_port)
+            .parse()
+            .unwrap();
+        let timeout = Arc::new(AtomicBool::new(false));
+        let thread_timeout = timeout.clone();
+        let thread_timeout_duration = self.options.timeout.clone();
+        self.rt.spawn(async move {
+            tokio::time::sleep(thread_timeout_duration).await;
+            thread_timeout.store(true, Ordering::Relaxed);
+        });
+        loop {
+            if timeout.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+            socket.send_to(self.options.payload.as_slice(), broadcast_addr)?;
+            std::thread::sleep(self.options.broadcast_delay);
+        }
+    }
+
     async fn discover(&self) -> std::io::Result<Option<Service>> {
         let socket = UdpSocket::bind(format!("{}:{}", "0.0.0.0", self.options.service_port))?;
         socket.set_broadcast(true)?;
@@ -99,7 +123,7 @@ impl Discover {
             }
             None
         })
-        .await;
+            .await;
         match res {
             Ok(service) => {
                 return Ok(service);
