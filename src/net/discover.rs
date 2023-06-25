@@ -52,12 +52,14 @@ pub struct Service {
 
 pub struct Discover {
     options: DiscoverOptions,
+    broadcast_running: Arc<AtomicBool>,
     rt: Arc<Runtime>,
 }
 
 impl Discover {
     pub fn new(rt: Arc<Runtime>, options: DiscoverOptions) -> Self {
-        Self { options, rt }
+        let broadcast_running = Arc::new(AtomicBool::new(false));
+        Self { options, broadcast_running, rt }
     }
 
     pub fn discover_service(&self) -> Option<Service> {
@@ -76,6 +78,8 @@ impl Discover {
     }
 
     pub fn broadcast(&self) -> std::io::Result<()> {
+        self.broadcast_running.store(true, Ordering::Relaxed);
+
         let socket = UdpSocket::bind("0.0.0.0:0")?;
         socket.set_broadcast(true)?;
 
@@ -89,12 +93,20 @@ impl Discover {
             tokio::time::sleep(thread_timeout_duration).await;
             thread_timeout.store(true, Ordering::Relaxed);
         });
-        loop {
+        while self.broadcast_running.load(Ordering::Relaxed) {
             if timeout.load(Ordering::Relaxed) {
-                return Ok(());
+                break;
             }
             socket.send_to(self.options.payload.as_slice(), broadcast_addr)?;
             std::thread::sleep(self.options.broadcast_delay);
+        }
+        Ok(())
+    }
+
+    pub fn stop_broadcast(&self) {
+        if !self.broadcast_running.swap(false, Ordering::Relaxed) {
+            println!("broadcast already stopped, do nothing.");
+            return;
         }
     }
 

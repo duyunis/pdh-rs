@@ -6,6 +6,7 @@ use anyhow::{Error, Result};
 use byte_unit::{AdjustedByte, Byte};
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
+use crate::net::discover;
 
 use crate::print_flush;
 use crate::utils::files;
@@ -30,6 +31,7 @@ impl SenderOptions {
     }
 }
 
+#[derive(Debug)]
 pub struct Sender {
     options: SenderOptions,
     file_info: Vec<FileInfo>,
@@ -55,6 +57,8 @@ impl Sender {
 
     pub fn send(&mut self) -> Result<()> {
         self.prepare_send()?;
+        let discover = discover::Discover::new(self.runtime.clone(), discover::DiscoverOptions::default());
+        discover.broadcast()?;
         Ok(())
     }
 

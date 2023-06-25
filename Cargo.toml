@@ -1,6 +1,5 @@
 [package]
 name = "pdh-rs"
-author = "DuYunis"
 version = "0.1.0"
 edition = "2021"
 
@@ -14,7 +13,7 @@ byteorder = "1.4.3"
 clap = { version = "4.1.11", features = ["derive"] }
 glob = "0.3.1"
 log = "0.4.17"
-num_enum = "0.5.11"
+num_enum = "0.6.1"
 pbr = "1.1.1"
 serde = { version = "1.0.160", features = ["derive"] }
 simple_logger = "4.1.0"

@@ -4,9 +4,10 @@ use clap::{ArgAction, CommandFactory, Parser, Subcommand, ValueEnum};
 use tokio::runtime::Builder;
 
 use pdh_rs::common::{consts, version};
+use pdh_rs::relay::relay;
 use pdh_rs::send::sender::{Sender, SenderOptions};
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[clap(name = "pdh")]
 struct Cmd {
     #[clap(subcommand)]
@@ -21,7 +22,7 @@ struct Cmd {
     debug: bool,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum PdhCmd {
     /// Send file(s), or folder (see options with pdh send -h)
     Send(SendCmd),
@@ -33,7 +34,7 @@ enum PdhCmd {
     Relay(RelayCmd),
 }
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 struct SendCmd {
     /// Send file(s), folder share code to receive. If not set will auto-generated
     #[clap(short = 'c', long)]
@@ -52,11 +53,19 @@ struct SendCmd {
     files: Vec<String>,
 }
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 struct ReceiveCmd {}
 
-#[derive(Parser)]
-struct RelayCmd {}
+#[derive(Parser, Debug)]
+struct RelayCmd {
+    ///  relay host
+    #[clap(long, default_value = "0.0.0.0")]
+    host: String,
+
+    /// relay port
+    #[clap(short = 'p', long, default_value = "6880")]
+    port: u16,
+}
 
 #[derive(Clone, Copy, ValueEnum, Debug)]
 enum RpcData {
@@ -86,19 +95,23 @@ fn main() -> Result<()> {
     }
 
     if let Some(pdh_cmd) = cmd.pdh {
-        let runtime = Builder::new_multi_thread()
+        let runtime = Arc::new(Builder::new_multi_thread()
             .worker_threads(16)
             .enable_all()
             .build()
-            .unwrap();
+            .unwrap());
+
         match pdh_cmd {
             PdhCmd::Send(send) => {
                 let sender_options = SenderOptions::new(send.share_code, send.zip.unwrap(), send.relay, send.files);
-                let mut sender = Sender::new(Arc::new(runtime), sender_options);
-                return sender.send();
+                let mut sender = Sender::new(runtime.clone(), sender_options);
+                sender.send()?;
             }
             PdhCmd::Recv(recv) => {}
-            PdhCmd::Relay(relay) => {}
+            PdhCmd::Relay(relay) => {
+                let relay = relay::Relay::new(relay.host, relay.port, runtime.clone());
+                relay.run()?;
+            }
         }
     } else {
         let mut cmd = Cmd::command();

@@ -19,6 +19,7 @@ use crate::message::{self, Message, TransmitAble};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ServerConfig {
+    pub host: String,
     pub listener_port: u16,
     pub send_max_buffer: usize,
 }
@@ -54,10 +55,11 @@ impl Server {
     }
 
     pub async fn listener(&self) {
-        let addr = format!("0.0.0.0:{}", self.config.listener_port);
+        let addr = format!("{}:{}", self.config.host, self.config.listener_port);
         let listener = TcpListener::bind(addr.as_str()).await;
         match listener {
             Ok(listener) => {
+                println!("{} listen on [{}]", self.name, addr);
                 while self.running.load(Ordering::Relaxed) {
                     let incoming = listener.accept().await;
                     if let Ok((mut stream, addr)) = incoming {
@@ -87,7 +89,7 @@ impl Server {
             }
             Err(e) => {
                 self.running.store(false, Ordering::Relaxed);
-                error!("start server failed: {}", e);
+                println!("start server failed: {}", e);
             }
         }
     }
